@@ -136,3 +136,108 @@
 @utility animate-rise { animation: rise 0.5s ease-out both; }
 @keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 oklch(0.68 0.16 30 / 0.6); } 100% { box-shadow: 0 0 0 18px oklch(0.68 0.16 30 / 0); } }
 @utility animate-listen { animation: pulse-ring 1.2s ease-out infinite; }
+
+
+/* ========================================
+   Mobile Responsiveness Improvements
+   Existing styles remain unchanged
+======================================== */
+
+/* Prevent unwanted horizontal scrolling */
+html {
+  max-width: 100%;
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+/* Keep content within small screens */
+#root {
+  width: 100%;
+  min-width: 0;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* Prevent long text from breaking layouts */
+h1,
+h2,
+h3,
+p,
+td,
+th {
+  overflow-wrap: anywhere;
+}
+
+/* Improve touch interaction on phones */
+button,
+a,
+input,
+textarea,
+select {
+  touch-action: manipulation;
+}
+
+/* Keep media responsive */
+img,
+video,
+canvas {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Tablet and mobile screens */
+@media (max-width: 768px) {
+  body {
+    font-size: 15px;
+  }
+
+  main {
+    min-width: 0;
+  }
+
+  table {
+    white-space: normal;
+  }
+
+  /* Keep form text readable and avoid iPhone zoom */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* Small mobile screens */
+@media (max-width: 480px) {
+  h1 {
+    overflow-wrap: anywhere;
+  }
+
+  button {
+    max-width: 100%;
+  }
+}
+
+/* Respect device accessibility preferences */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
