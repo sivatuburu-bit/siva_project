@@ -27,6 +27,9 @@ const bodySchema = z.object({
     )
     .min(1)
     .max(60),
+  language: z
+    .enum(["English", "Telugu", "Hindi", "Tamil", "Kannada"])
+    .default("English"),
 });
 
 function json(status: number, error: string) {
@@ -43,6 +46,216 @@ function textOf(message: UIMessage) {
     .trim();
 }
 
+// Get the date and weekday in the college's timezone.
+function getIndiaDateInfo() {
+  const now = new Date();
+
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "long",
+  }).formatToParts(now);
+
+  const get = (type: string) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+
+  return {
+    date: `${get("year")}-${get("month")}-${get("day")}`,
+    day: get("weekday"),
+  };
+}
+
+// Handles both "Monday" and abbreviated values such as "Mon".
+function normalizeDay(value: unknown): string {
+  const day = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\./g, "")
+    .slice(0, 3);
+
+  const days: Record<string, string> = {
+    mon: "monday",
+    tue: "tuesday",
+    wed: "wednesday",
+    thu: "thursday",
+    fri: "friday",
+    sat: "saturday",
+    sun: "sunday",
+  };
+
+  return days[day] ?? "";
+}
+
+function formatDate(value: unknown): string {
+  if (typeof value !== "string" || !value) {
+    return "date not provided";
+  }
+
+  const date = new Date(`${value.slice(0, 10)}T12:00:00Z`);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(date);
+}
+
+// Calculate a date relative to the current India date.
+function getDateOffset(baseDate: string, offsetDays: number): string {
+  const date = new Date(`${baseDate}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString().slice(0, 10);
+}
+
+// Get the weekday for any calendar date.
+function getWeekdayForDate(dateValue: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    timeZone: "UTC",
+  }).format(new Date(`${dateValue}T12:00:00Z`));
+}
+
+// Validate calendar dates, including leap years.
+function isValidCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+
+  const date = new Date(`${value}T12:00:00Z`);
+
+  return (
+    !Number.isNaN(date.getTime()) &&
+    date.toISOString().slice(0, 10) === value
+  );
+}
+
+// Detect yesterday, day before yesterday, tomorrow,
+// today, ISO dates, numeric dates, and written month dates.
+function getRequestedDate(
+  question: string,
+  today: string,
+): string | null {
+  const text = question.toLowerCase();
+
+  if (/\b(day before yesterday|the day before yesterday)\b/.test(text)) {
+    return getDateOffset(today, -2);
+  }
+
+  if (/\byesterday\b/.test(text)) {
+    return getDateOffset(today, -1);
+  }
+
+  if (/\btomorrow\b/.test(text)) {
+    return getDateOffset(today, 1);
+  }
+
+  if (/\btoday\b/.test(text)) {
+    return today;
+  }
+
+  const isoMatch = text.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+
+  if (isoMatch && isValidCalendarDate(isoMatch[1])) {
+    return isoMatch[1];
+  }
+
+  // DD/MM/YYYY or DD-MM-YYYY
+  const numericMatch = text.match(
+    /\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/,
+  );
+
+  if (numericMatch) {
+    const day = numericMatch[1].padStart(2, "0");
+    const month = numericMatch[2].padStart(2, "0");
+    const value = `${numericMatch[3]}-${month}-${day}`;
+
+    if (isValidCalendarDate(value)) {
+      return value;
+    }
+  }
+
+  const months: Record<string, string> = {
+    jan: "01",
+    january: "01",
+    feb: "02",
+    february: "02",
+    mar: "03",
+    march: "03",
+    apr: "04",
+    april: "04",
+    may: "05",
+    jun: "06",
+    june: "06",
+    jul: "07",
+    july: "07",
+    aug: "08",
+    august: "08",
+    sep: "09",
+    sept: "09",
+    september: "09",
+    oct: "10",
+    october: "10",
+    nov: "11",
+    november: "11",
+    dec: "12",
+    december: "12",
+  };
+
+  const monthPattern =
+    "(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)";
+
+  // October 20, 2026 or October 20
+  const monthFirst = text.match(
+    new RegExp(
+      `\\b${monthPattern}\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(20\\d{2}))?\\b`,
+    ),
+  );
+
+  // 20 October 2026 or 20 October
+  const dayFirst = text.match(
+    new RegExp(
+      `\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+${monthPattern}(?:,?\\s+(20\\d{2}))?\\b`,
+    ),
+  );
+
+  if (monthFirst || dayFirst) {
+    const match = monthFirst ?? dayFirst!;
+    const monthName = monthFirst ? match[1] : match[2];
+    const dayNumber = Number(monthFirst ? match[2] : match[1]);
+    const year = match[3] || today.slice(0, 4);
+
+    const value =
+      `${year}-${months[monthName]}-${String(dayNumber).padStart(2, "0")}`;
+
+    if (isValidCalendarDate(value)) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+// Match database records against a requested date.
+function recordMatchesDate(
+  record: Record<string, any>,
+  dateFields: string[],
+  targetDate: string,
+): boolean {
+  return dateFields.some((field) => {
+    const value = record?.[field];
+
+    return (
+      typeof value === "string" &&
+      value.slice(0, 10) === targetDate
+    );
+  });
+}
+
 export async function handleCampusChat(
   request: Request,
 ): Promise<Response> {
@@ -56,7 +269,7 @@ export async function handleCampusChat(
     );
   }
 
-  // 1. Verify the student's Supabase session
+  // 1. Verify the student's Supabase session.
   const auth = request.headers.get("authorization") ?? "";
   const token = auth.startsWith("Bearer ")
     ? auth.slice(7)
@@ -100,7 +313,7 @@ export async function handleCampusChat(
     );
   }
 
-  // 2. Validate the user's question
+  // 2. Validate the student's question and language.
   let parsed;
 
   try {
@@ -109,6 +322,7 @@ export async function handleCampusChat(
     return json(400, "Invalid request.");
   }
 
+  const language = parsed.language;
   const messages = parsed.messages as unknown as UIMessage[];
   const lastMessage = messages[messages.length - 1];
 
@@ -128,7 +342,10 @@ export async function handleCampusChat(
     );
   }
 
-  // 3. Load campus information from Supabase
+  // 3. Load existing data and optional campus schedules.
+  // Existing Supabase client and user token preserve RLS.
+  const db = supabase as any;
+
   const [
     profile,
     announcements,
@@ -137,96 +354,218 @@ export async function handleCampusChat(
     events,
     facilities,
     attendance,
+    collegeHours,
+    holidays,
   ] = await Promise.all([
-    supabase
+    db
       .from("profiles")
       .select("full_name, student_id, department, year")
       .eq("id", userId)
       .maybeSingle(),
 
-    supabase
+    db
       .from("announcements")
       .select("title, body, category, posted_at")
       .order("posted_at", { ascending: false })
       .limit(10),
 
-    supabase
+    db
       .from("timetable")
-      .select(
-        "day, day_order, start_time, end_time, course, room, instructor",
-      )
+      .select("*")
       .order("day_order")
       .order("start_time"),
 
-    supabase
+    db
       .from("exams")
-      .select("course, exam_date, start_time, venue, exam_type")
+      .select("*")
       .order("exam_date"),
 
-    supabase
+    db
       .from("events")
-      .select("title, description, event_date, location")
+      .select("*")
       .order("event_date"),
 
-    supabase
+    db
       .from("facilities")
       .select("name, location, hours, description"),
 
-    supabase
+    db
       .from("attendance")
       .select("course, attended, total")
       .eq("user_id", userId),
+
+    db
+      .from("college_hours")
+      .select("*"),
+
+    db
+      .from("holidays")
+      .select("*")
+      .order("holiday_date"),
   ]);
 
-  // 4. Calculate today's date and find the next upcoming exam
-  const now = new Date();
+  // 4. Determine today's date and weekday in India.
+  const { date: today, day: todayDay } = getIndiaDateInfo();
 
-  const today =
-    `${now.getFullYear()}-` +
-    `${String(now.getMonth() + 1).padStart(2, "0")}-` +
-    `${String(now.getDate()).padStart(2, "0")}`;
+  const allTimetable = timetable.data ?? [];
 
-  const upcomingExams = (exams.data ?? [])
+  // Calculate relative dates and detect the date in the question.
+  const yesterdayDate = getDateOffset(today, -1);
+  const dayBeforeYesterdayDate = getDateOffset(today, -2);
+  const tomorrowDate = getDateOffset(today, 1);
+  const requestedDate = getRequestedDate(question, today);
+
+  // Get weekly classes for any date.
+  const getClassesForDate = (dateValue: string) => {
+    const weekday = getWeekdayForDate(dateValue).toLowerCase();
+
+    return allTimetable.filter((item: any) => {
+      const normalized = normalizeDay(
+        item.day ?? item.day_of_week,
+      );
+
+      return normalized === weekday;
+    });
+  };
+
+  // Today's timetable.
+  const todayTimetable = getClassesForDate(today);
+
+  // Timetables for relative dates.
+  const yesterdayTimetable = getClassesForDate(yesterdayDate);
+  const dayBeforeYesterdayTimetable =
+    getClassesForDate(dayBeforeYesterdayDate);
+  const tomorrowTimetable = getClassesForDate(tomorrowDate);
+
+  // Gather all available records for the exact requested date.
+  const requestedDateOverview = requestedDate
+    ? {
+        date: requestedDate,
+        weekday: getWeekdayForDate(requestedDate),
+        classes: getClassesForDate(requestedDate),
+
+        exams: (exams.data ?? []).filter((item: any) =>
+          recordMatchesDate(
+            item,
+            ["exam_date", "date", "start_date"],
+            requestedDate,
+          ),
+        ),
+
+        events: (events.data ?? []).filter((item: any) =>
+          recordMatchesDate(
+            item,
+            ["event_date", "date", "start_date"],
+            requestedDate,
+          ),
+        ),
+
+        holidays: (holidays.data ?? []).filter((item: any) =>
+          recordMatchesDate(
+            item,
+            ["holiday_date", "date"],
+            requestedDate,
+          ),
+        ),
+
+        announcements: (announcements.data ?? []).filter(
+          (item: any) =>
+            recordMatchesDate(
+              item,
+              ["posted_at", "created_at", "date"],
+              requestedDate,
+            ),
+        ),
+      }
+    : null;
+
+  // 5. Find the next upcoming exam.
+  const allExams = exams.data ?? [];
+
+  const upcomingExams = allExams
     .filter(
-      (exam) =>
-        Boolean(exam.exam_date) &&
-        exam.exam_date >= today,
+      (exam: Record<string, any>) =>
+        typeof exam.exam_date === "string" &&
+        exam.exam_date.slice(0, 10) >= today,
     )
-    .sort((a, b) => {
-      const dateComparison = a.exam_date.localeCompare(
-        b.exam_date,
+    .sort((a: Record<string, any>, b: Record<string, any>) => {
+      const dateComparison = String(a.exam_date).localeCompare(
+        String(b.exam_date),
       );
 
       if (dateComparison !== 0) {
         return dateComparison;
       }
 
-      return (a.start_time ?? "").localeCompare(
-        b.start_time ?? "",
+      return String(a.start_time ?? "").localeCompare(
+        String(b.start_time ?? ""),
       );
     });
 
   const nextExam = upcomingExams[0] ?? null;
 
-  // 5. Give campus context to the AI
+  // 6. Prepare readable data for the AI.
+  const optionalData = (
+    result: { data?: unknown[] | null; error?: unknown },
+  ) => {
+    if (result.error) {
+      return {
+        status: "unavailable",
+        records: [],
+      };
+    }
+
+    return {
+      status: "loaded",
+      records: result.data ?? [],
+    };
+  };
+
+  const hoursData = optionalData(collegeHours);
+  const holidaysData = optionalData(holidays);
+
+  // 7. Give Ollama the campus context and selected language.
   const instructions = `
-You are Campus Assistant, a friendly AI helper for college students.
+You are Campus Assistant, a helpful AI assistant for college students.
 
-Today's date is ${today}.
+CURRENT INDIA DATE: ${today}
+CURRENT WEEKDAY IN INDIA: ${todayDay}
+YESTERDAY'S DATE: ${yesterdayDate}
+DAY BEFORE YESTERDAY'S DATE: ${dayBeforeYesterdayDate}
+TOMORROW'S DATE: ${tomorrowDate}
+REQUESTED DATE DETECTED: ${requestedDate ?? "No explicit date detected"}
+TIMEZONE: Asia/Kolkata
 
-Answer in clear, simple English.
-Keep answers concise, usually 2-5 sentences.
-Avoid tables because answers may be read aloud.
+LANGUAGE SUPPORT:
+- The student's selected response language is: ${language}.
+- Always answer in ${language}, regardless of the language used in the question.
+- Do not switch languages unless the selected language changes.
+- English: use clear, simple English.
+- Telugu: use natural Telugu, preferably Telugu script.
+- Hindi: use natural Hindi, preferably Devanagari script.
+- Tamil: use natural Tamil script.
+- Kannada: use natural Kannada script.
+- Keep answers friendly, concise, and easy for college students to understand.
+- Explain technical terms in beginner-friendly language.
+- Use the available college database data to answer college-related questions.
+- Never invent college information. If the required data is missing, say it is unavailable.
+- Preserve the accuracy of dates, class timings, attendance figures, and exam details.
+- For voice responses, use natural wording in the selected language.
+
+GENERAL RESPONSE STYLE:
+- Use concise answers, usually 2-5 sentences.
+- Avoid tables because your answers may be read aloud by TTS.
 
 IMPORTANT RULES:
-- Use the campus database information provided below.
-- Never invent college information, dates, times, or locations.
-- Read the relevant data section before answering.
-- If the requested information is present, answer directly.
-- Do not say information is unavailable when it is present in the data.
-- If information is genuinely missing, explain that clearly.
-- Never confuse timetable classes with examinations.
-- Attendance below 75% is a shortage. Mention it when relevant.
+- Use the database context below as the source of truth.
+- Never invent college timings, dates, classes, exams, holidays, event details, or locations.
+- Answer the student's actual question directly.
+- If a requested detail is missing, say it is not available.
+- Do not confuse regular classes with examinations.
+- Interpret today, yesterday, day before yesterday, and tomorrow using the India dates provided above.
+- Use 12-hour AM/PM time when practical.
+- Never claim a schedule is confirmed if the data does not say so.
+- Attendance shortage is below 75%; calculate only when total > 0.
 
 STUDENT PROFILE:
 ${JSON.stringify(profile.data ?? null)}
@@ -234,14 +573,29 @@ ${JSON.stringify(profile.data ?? null)}
 ANNOUNCEMENTS:
 ${JSON.stringify(announcements.data ?? [])}
 
-TIMETABLE:
-${JSON.stringify(timetable.data ?? [])}
+TODAY'S TIMETABLE:
+${JSON.stringify(todayTimetable)}
+
+YESTERDAY'S TIMETABLE:
+${JSON.stringify(yesterdayTimetable)}
+
+DAY BEFORE YESTERDAY'S TIMETABLE:
+${JSON.stringify(dayBeforeYesterdayTimetable)}
+
+TOMORROW'S TIMETABLE:
+${JSON.stringify(tomorrowTimetable)}
+
+FULL WEEK TIMETABLE:
+${JSON.stringify(allTimetable)}
+
+REQUESTED DATE OVERVIEW:
+${JSON.stringify(requestedDateOverview)}
 
 ALL EXAMS:
-${JSON.stringify(exams.data ?? [])}
+${JSON.stringify(allExams)}
 
 NEXT UPCOMING EXAM:
-${JSON.stringify(nextExam ?? null)}
+${JSON.stringify(nextExam)}
 
 EVENTS:
 ${JSON.stringify(events.data ?? [])}
@@ -249,60 +603,77 @@ ${JSON.stringify(events.data ?? [])}
 FACILITIES:
 ${JSON.stringify(facilities.data ?? [])}
 
+COLLEGE DAILY HOURS:
+${JSON.stringify(hoursData)}
+
+HOLIDAYS:
+${JSON.stringify(holidaysData)}
+
 ATTENDANCE:
 ${JSON.stringify(attendance.data ?? [])}
 
 HOW TO ANSWER:
 
-1. NEXT EXAM:
-When the student asks "When is my next exam?",
-"What is my next exam?", or a similar question,
-use the NEXT UPCOMING EXAM section directly.
+1. TODAY'S TIMETABLE:
+Use TODAY'S TIMETABLE for questions about today's classes.
+Include course, start time, end time, room, and instructor when available.
+Never invent classes.
 
-Include the course name, exam type, date, time, and venue
-when those details are available.
+2. ANY DATE:
+For yesterday, use YESTERDAY'S TIMETABLE.
+For the day before yesterday, use DAY BEFORE YESTERDAY'S TIMETABLE.
+For tomorrow, use TOMORROW'S TIMETABLE.
+For a specific date, use REQUESTED DATE OVERVIEW.
+Match recurring weekly classes using that date's weekday.
+Report classes, exams, events, holidays, and announcements that match the requested date.
+If a category has no matching records, say no records for that category are listed for that date.
+Never output raw JSON or database records.
+Do not invent missing times, rooms, instructors, or events.
 
-If NEXT UPCOMING EXAM is null, say that no upcoming exam
-is currently listed in the database.
+3. COLLEGE OPENING AND CLOSING:
+Use COLLEGE DAILY HOURS for opening time, closing time, lunch breaks, working days, and closed days.
+If the required time is missing, say it is not available.
+Do not assume closing time from the last class.
 
-2. TIMETABLE:
-Use the TIMETABLE section for class schedules.
-Include the day, course, start time, end time, room,
-and instructor when available.
+4. LAB TIMINGS:
+Use timetable rows and FACILITIES for lab schedules and facility opening hours.
+Distinguish scheduled lab classes from general opening hours.
 
-3. ANNOUNCEMENTS:
-Use the ANNOUNCEMENTS section.
+5. EXAMS:
+Use ALL EXAMS for exam date, course, exam type, start time, end time, and venue when available.
+Use NEXT UPCOMING EXAM for next-exam questions.
+Do not claim an end time if none is recorded.
+If no upcoming exams exist, say none are currently listed.
+
+6. EVENTS:
+Use EVENTS for event title, date, description, location, start time, and end time when available.
+Do not invent event times.
+
+7. HOLIDAYS:
+Use HOLIDAYS for holiday names, dates, and descriptions.
+If the table is unavailable, explain that holiday information is not currently available.
+
+8. ANNOUNCEMENTS:
+Use ANNOUNCEMENTS for notices and updates.
 Summarize the relevant title, category, and body.
 
-4. EXAMS:
-Use the ALL EXAMS section for exam-related questions.
-Include the course, exam type, date, time, and venue
-when available.
+9. FACILITIES:
+Use FACILITIES for facility names, locations, opening hours, and descriptions.
 
-5. EVENTS:
-Use the EVENTS section for event titles, dates,
-descriptions, and locations.
-
-6. FACILITIES:
-Use the FACILITIES section for facility names,
-locations, opening hours, and descriptions.
-
-7. STUDENT PROFILE:
-Use the STUDENT PROFILE section for the student's name,
-student ID, department, and year.
+10. STUDENT PROFILE:
+Use STUDENT PROFILE for the signed-in student's information.
 If a field is missing, say it has not been provided.
 
-8. ATTENDANCE:
+11. ATTENDANCE:
 Use only the signed-in student's attendance records.
-Calculate percentage as attended / total * 100
-only when total is greater than zero.
-If no attendance records exist, say attendance records
-are not available yet.
+Calculate percentage as attended / total * 100 only when total is greater than zero.
+If no records exist, say attendance records are not available yet.
 
-Always answer the student's actual question.
+Always answer using the most relevant data.
+Never fabricate missing information.
 `;
 
-  // 6. Save the student's question
+  // 8. Save the student's question.
   const { error: userMessageError } = await supabase
     .from("chat_messages")
     .insert({
@@ -318,7 +689,7 @@ Always answer the student's actual question.
     );
   }
 
-  // 7. Connect to Ollama using its OpenAI-compatible API
+  // 9. Connect to Ollama using its OpenAI-compatible API.
   const provider = createOpenAI({
     baseURL: OLLAMA_BASE_URL,
     apiKey: "ollama",
@@ -333,7 +704,7 @@ Always answer the student's actual question.
       ),
       abortSignal: request.signal,
 
-      // 8. Save the AI response in Supabase
+      // Save the AI response in Supabase.
       onFinish: async ({ text }) => {
         if (!text.trim()) return;
 
@@ -354,7 +725,7 @@ Always answer the student's actual question.
       },
     });
 
-    // 9. Stream the answer to the frontend
+    // Preserve the existing frontend streaming / TTS integration.
     return result.toUIMessageStreamResponse({
       originalMessages: messages,
       onError: (error) => {
